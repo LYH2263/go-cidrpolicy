@@ -68,12 +68,21 @@ func (h *HitLog) Buffer() []string {
 func (h *HitLog) Rotate(newPath string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Open the new handle first so a failure leaves the current handle
+	// (and thus logging) intact.
 	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	// leak old handle
+	// Close the previous handle so the rotated file is no longer held by
+	// this process. On Windows an open write handle lacks FILE_SHARE_DELETE,
+	// so leaving it open makes Remove-Item fail with SharingViolation and the
+	// rotated directory can never be cleaned up.
+	old := h.f
 	h.f = f
 	h.path = newPath
+	if old != nil {
+		_ = old.Close()
+	}
 	return nil
 }
