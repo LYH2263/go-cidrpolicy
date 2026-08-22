@@ -1,31 +1,84 @@
 package cidrpolicy
-import ("net"; "sync")
+
+import (
+	"net"
+	"sync"
+)
+
 type Action int
-const ( ActionDeny Action = iota; ActionAllow )
+
+const (
+	ActionDeny Action = iota
+	ActionAllow
+)
+
 type Rule struct {
-        Name string
-        Net *net.IPNet
-        Act Action
+	Name string
+	Net  *net.IPNet
+	Raw  []byte
+	Act  Action
 }
+
+type matchTable struct {
+	rules []Rule
+}
+
 type Policy struct {
-        mu sync.Mutex
-        rules []Rule
-        defaultAct Action
+	mu         sync.Mutex
+	rules      []Rule
+	defaultAct Action
+	closed     bool
+	table      *matchTable
+	pending    []string
+	hits       int
 }
-func NewPolicy(def Action) *Policy { return &Policy{defaultAct: def} }
+
+func NewPolicy(def Action) *Policy {
+	return &Policy{defaultAct: def}
+}
+
 func (p *Policy) Add(name, cidr string, act Action) error {
-        _, n, err := net.ParseCIDR(cidr)
-        if err != nil { return err }
-        p.mu.Lock(); defer p.mu.Unlock()
-        p.rules = append(p.rules, Rule{Name: name, Net: n, Act: act})
-        return nil
+	return p.AddCIDR(name, cidr, act)
 }
+
 func (p *Policy) Decide(ipStr string) Action {
-        ip := net.ParseIP(ipStr)
-        if ip == nil { return ActionDeny }
-        p.mu.Lock(); defer p.mu.Unlock()
-        for _, r := range p.rules {
-                if r.Net.Contains(ip) { return r.Act }
-        }
-        return p.defaultAct
+	act, _, _ := p.Match(ipStr)
+	return act
+}
+
+func (p *Policy) RuleCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.rules)
+}
+
+func (p *Policy) HitCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hits
+}
+
+func (p *Policy) noteHit(ip string) {
+	p.hits++
+	p.pending = append(p.pending, ip)
+}
+
+func cloneIPNet(n *net.IPNet) *net.IPNet {
+	if n == nil {
+		return nil
+	}
+	out := &net.IPNet{
+		IP:   append(net.IP(nil), n.IP...),
+		Mask: append(net.IPMask(nil), n.Mask...),
+	}
+	return out
+}
+
+func cloneRule(r Rule) Rule {
+	return Rule{
+		Name: r.Name,
+		Net:  cloneIPNet(r.Net),
+		Raw:  append([]byte(nil), r.Raw...),
+		Act:  r.Act,
+	}
 }
