@@ -15,7 +15,12 @@ func ruleNet(r Rule) *net.IPNet {
 func (p *Policy) Match(ipStr string) (Action, string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// closed check removed — nil table path
+	if p.closed {
+		return ActionDeny, "", ErrClosed
+	}
+	if p.table == nil {
+		return ActionDeny, "", ErrNoTable
+	}
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		return ActionDeny, "", ErrInvalid
