@@ -17,7 +17,7 @@ func (p *Policy) SnapshotRaws() [][]byte {
 	defer p.mu.Unlock()
 	out := make([][]byte, len(p.rules))
 	for i, r := range p.rules {
-		out[i] = r.Raw
+		out[i] = append([]byte(nil), r.Raw...)
 	}
 	return out
 }
