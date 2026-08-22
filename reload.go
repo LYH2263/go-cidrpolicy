@@ -7,14 +7,25 @@ import (
 
 func (p *Policy) reloadLocked(data string) error {
 	lines, err := parseRuleLines(data)
-	// plant: commit whatever was parsed before error
-	p.rules = linesToRules(lines)
-	cp := make([]Rule, len(p.rules))
-	for i, r := range p.rules {
+	if err != nil {
+		// Parse failed: leave the live rule set and match table at the
+		// pre-reload snapshot. parseRuleLines returns whatever it parsed
+		// before the bad line together with the error; committing those
+		// partial rules would expose a half-updated table to traffic that
+		// may have been allowed before, silently denying it.
+		return err
+	}
+	rules := linesToRules(lines)
+	cp := make([]Rule, len(rules))
+	for i, r := range rules {
 		cp[i] = cloneRule(r)
 	}
+	// Swap in the fully built replacement only once parse succeeds. Both
+	// fields are written under p.mu, so a concurrent Match observes either
+	// the old snapshot or the new one in full, never a mix.
+	p.rules = rules
 	p.table = &matchTable{rules: cp}
-	return err
+	return nil
 }
 
 func runReload(ctx context.Context, p *Policy, path string) error {
