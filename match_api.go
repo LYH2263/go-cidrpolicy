@@ -18,10 +18,19 @@ func (p *Policy) Match(ipStr string) (Action, string, error) {
 	if p.closed {
 		return ActionDeny, "", ErrClosed
 	}
+	// Not yet Init / no table built: return a decidable error instead of
+	// panicking on p.table.rules. This guard runs before noteHit so the
+	// failure path leaves no half-recorded hit behind — a dirty HitCount
+	// or pending buffer would pollute audit, reports and the security board.
+	if p.table == nil {
+		return ActionDeny, "", ErrNoTable
+	}
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		return ActionDeny, "", ErrInvalid
 	}
+	// Only count a hit once the table is ready and the IP is valid; every
+	// error return above must keep HitCount clean.
 	p.noteHit(ipStr)
 	for _, r := range p.table.rules {
 		n := ruleNet(r)
