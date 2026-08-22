@@ -5,23 +5,40 @@ import (
 	"os"
 )
 
-func (p *Policy) reloadLocked(data string) error {
+// buildReloadState parses data into a fresh rule set and a compiled match table
+// without touching the policy's live state. Building the candidate outside the
+// lock means a cancelled caller never observes a half-swapped table: if the
+// reload is discarded, the candidate is simply dropped. Safe to call without
+// holding p.mu.
+func buildReloadState(data string) ([]Rule, *matchTable, error) {
 	lines, err := parseRuleLines(data)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	p.rules = linesToRules(lines)
-	cp := make([]Rule, len(p.rules))
-	for i, r := range p.rules {
+	rules := linesToRules(lines)
+	cp := make([]Rule, len(rules))
+	for i, r := range rules {
 		cp[i] = cloneRule(r)
 	}
-	p.table = &matchTable{rules: cp}
-	return nil
+	return rules, &matchTable{rules: cp}, nil
 }
 
 func runReload(ctx context.Context, p *Policy, path string) error {
-	_ = ctx
+	// A cancelled reload must leave the live table untouched: bail before any
+	// work so the caller's "取消重载" is honored immediately.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	// Re-check after the (potentially slow) read: the caller may have cancelled
+	// while the file was being loaded.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	rules, table, err := buildReloadState(string(b))
 	if err != nil {
 		return err
 	}
@@ -30,7 +47,15 @@ func runReload(ctx context.Context, p *Policy, path string) error {
 	if p.closed {
 		return ErrClosed
 	}
-	return p.reloadLocked(string(b))
+	// Final check under the lock: if the caller cancelled while we were waiting
+	// for the mutex, drop the candidate and keep the current table rather than
+	// pushing a half-built rule set onto production traffic.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.rules = rules
+	p.table = table
+	return nil
 }
 
 func (p *Policy) Reload(path string) error {
