@@ -18,8 +18,11 @@ func (p *Policy) CloseFlushCount() int {
 	if p.closed {
 		return 0
 	}
-	p.clearRules()
+	// Flush pending hits first so the returned count reflects the real number
+	// of unflushed records still in the buffer. clearRules() drops p.pending,
+	// so flushing after it would always report zero.
 	n := p.flushPending()
+	p.clearRules()
 	p.closed = true
 	return n
 }
